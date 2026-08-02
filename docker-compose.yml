@@ -1,0 +1,54 @@
+# Local development stack.
+#
+# Deliberately mirrors the free-tier production topology (Postgres + Redis +
+# S3-compatible object storage) so migrations and code paths are exercised
+# locally before they touch Neon / Upstash / R2. MinIO stands in for R2, which
+# is S3-API-compatible, so the same client code works against both.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: inspector
+      POSTGRES_PASSWORD: inspector
+      POSTGRES_DB: inspector
+    ports:
+      - "5433:5432" # 5433 to avoid clashing with any local Postgres on 5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inspector -d inspector"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # Stands in for Cloudflare R2 (S3-compatible API).
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: inspector
+      MINIO_ROOT_PASSWORD: inspector123
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # web console
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
+  miniodata:

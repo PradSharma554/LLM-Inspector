@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+/*
+ * DevTools, not Grafana.
+ *
+ * Dense, monospace, information-first. No cards, no rounded shadows, no
+ * animated gauges. Every pixel of vertical space is a row a developer could
+ * be reading instead.
+ */
+@theme {
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  /* Dark by default — this is a debugging tool, it sits next to a terminal. */
+  --color-bg: #0b0d10;
+  --color-panel: #121519;
+  --color-panel-2: #171b20;
+  --color-border: #262c34;
+  --color-border-soft: #1c2128;
+
+  --color-text: #e4e8ed;
+  --color-text-dim: #9aa4b0;
+  --color-text-faint: #626b76;
+
+  --color-accent: #4a9eff;
+
+  /* Span kind colours. Distinguishable at 4px wide in a waterfall bar and
+     distinguishable for the most common forms of colour blindness. */
+  --color-kind-llm: #4a9eff;
+  --color-kind-retrieval: #a97bff;
+  --color-kind-tool: #35c88f;
+  --color-kind-agent: #6b7684;
+  --color-kind-prompt: #d4a34a;
+  --color-kind-embedding: #47b8c4;
+  --color-kind-guardrail: #d96a9c;
+
+  --color-ok: #35c88f;
+  --color-error: #ff5f5f;
+  --color-warn: #d4a34a;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Thin scrollbars — the panels are dense and a 15px bar wastes real space. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 0;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Focus rings stay visible: this UI is keyboard-navigable by design. */
+:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+}

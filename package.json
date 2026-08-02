@@ -1,0 +1,18 @@
+{
+  "name": "llm-inspector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome DevTools for AI applications — trace and inspect every stage of an LLM request",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "packageManager": "pnpm@11.18.0",
+  "scripts": {
+    "build": "pnpm -r --filter='./packages/*' build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "dev:server": "pnpm --filter @llm-inspector/server dev",
+    "dev:web": "pnpm --filter @llm-inspector/web dev",
+    "db:migrate": "pnpm --filter @llm-inspector/server db:migrate"
+  }
+}
