@@ -11,8 +11,15 @@
     "build": "pnpm -r --filter='./packages/*' build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+
+    "infra": "docker compose up -d",
+    "infra:down": "docker compose down",
+
+    "server": "pnpm --filter @llm-inspector/server start",
+    "web": "pnpm --filter @llm-inspector/web dev",
     "dev:server": "pnpm --filter @llm-inspector/server dev",
-    "dev:web": "pnpm --filter @llm-inspector/web dev",
-    "db:migrate": "pnpm --filter @llm-inspector/server db:migrate"
+
+    "db:migrate": "pnpm --filter @llm-inspector/server db:migrate",
+    "demo": "node examples/agent-demo.mjs"
   }
 }

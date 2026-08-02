@@ -64,11 +64,32 @@ pnpm --filter @llm-inspector/server db:migrate
 The migration prints a `PROJECT_ID` and `INGEST_KEY` on first run. Only the
 key's SHA-256 is stored, so copy it then — it cannot be recovered.
 
+### Running it
+
+Two terminals. The collector reads `.env` via Node's `--env-file`, so neither
+command needs environment variables inline.
+
 ```bash
-pnpm --filter @llm-inspector/server build
-pnpm --filter @llm-inspector/server start
-curl localhost:4000/health
+pnpm build          # once, after a checkout or a change to packages/
+pnpm server         # terminal 1 -> collector on :4000
+pnpm web            # terminal 2 -> UI on http://localhost:3000
 ```
+
+Generate a trace (no API key, no cost — the demo uses a fake client that emits
+real Anthropic stream event shapes):
+
+```bash
+INSPECTOR_KEY=insp_... pnpm demo
+```
+
+| Script | What it does |
+| ------ | ------------ |
+| `pnpm infra` / `pnpm infra:down` | Postgres, Redis, MinIO via docker compose |
+| `pnpm server` | collector on :4000 (built output) |
+| `pnpm dev:server` | collector with tsc watch + auto-restart |
+| `pnpm web` | Next.js UI on :3000 |
+| `pnpm demo` | send a sample trace |
+| `pnpm test` | all 41 tests |
 
 ## Verified
 

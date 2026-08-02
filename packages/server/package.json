@@ -6,8 +6,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
-    "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput & node --watch --enable-source-maps dist/main.js",
-    "start": "node --enable-source-maps dist/main.js",
+    "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput & node --watch --enable-source-maps --env-file=../../.env dist/main.js",
+    "start": "node --enable-source-maps --env-file=../../.env dist/main.js",
+    "start:bare": "node --enable-source-maps dist/main.js",
     "test": "tsc -p tsconfig.json && node --test dist/**/*.test.js",
     "db:migrate": "tsc -p tsconfig.build.json && node dist/db/migrate.js"
   },

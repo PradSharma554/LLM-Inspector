@@ -1,0 +1,48 @@
+# Render blueprint for the collector + query API.
+#
+# Only the backend lives here; the Next.js UI goes to Vercel (see DEPLOY.md).
+#
+# Note the free plan spins the service down after ~15 minutes of inactivity, so
+# the first request after idle pays a cold start of roughly 30 seconds. For a
+# portfolio link that is a real papercut — mitigations are in DEPLOY.md.
+services:
+  - type: web
+    name: llm-inspector-collector
+    runtime: node
+    plan: free
+    region: singapore # match the Neon project's region (ap-southeast-1)
+
+    # Build from the repo root so pnpm can resolve the workspace: the server
+    # imports @llm-inspector/protocol via `workspace:*`, which only works if the
+    # whole workspace is installed.
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @llm-inspector/protocol build && pnpm --filter @llm-inspector/server build
+
+    # start:bare, NOT start. The `start` script passes --env-file=../../.env,
+    # and Node throws if that file is missing — which it is on Render, where
+    # env vars come from the dashboard instead.
+    startCommand: node --enable-source-maps packages/server/dist/main.js
+
+    healthCheckPath: /health
+
+    envVars:
+      - key: NODE_VERSION
+        value: 24.18.1
+      - key: PORT
+        value: 10000 # Render injects this; declared for clarity
+      - key: LOG_LEVEL
+        value: info
+
+      # Set these in the Render dashboard — never commit them.
+      # DATABASE_URL must be the POOLED Neon string (hostname contains -pooler).
+      - key: DATABASE_URL
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_REGION
+        value: auto
