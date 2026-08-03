@@ -1,0 +1,50 @@
+# Keeps the Render free-tier service awake so a visitor does not wait ~30s for
+# a cold start.
+#
+# Pings /health, NOT /ready. /health deliberately does not touch Postgres:
+# Render sleeps on HTTP inactivity and does not care whether a request reached
+# the database, so waking Neon on every ping would burn ~90 of the 100 free
+# CU-hours per month purely to avoid a cold start.
+#
+# Free on public repositories. Note GitHub delays scheduled workflows under
+# load — a */12 cron often fires every 15-25 minutes in practice. That is fine
+# here: a missed ping costs one cold start, nothing more.
+name: keepalive
+
+on:
+  schedule:
+    - cron: "*/12 * * * *"
+  workflow_dispatch: # allow a manual run from the Actions tab
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping collector
+        env:
+          # Set this as a repository variable:
+          #   Settings -> Secrets and variables -> Actions -> Variables
+          # A variable rather than a secret: it is a public URL, and secrets
+          # are masked in logs, which makes failures harder to debug.
+          URL: ${{ vars.COLLECTOR_URL }}
+        run: |
+          if [ -z "$URL" ]; then
+            echo "COLLECTOR_URL repository variable is not set — skipping."
+            exit 0
+          fi
+
+          # --max-time 60 because a sleeping Render service takes ~30s to wake;
+          # the default would give up before it answers.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 60 "$URL/health" || echo 000)
+
+          if [ "$code" = "200" ]; then
+            echo "awake (HTTP $code)"
+          else
+            echo "unexpected response: HTTP $code"
+            exit 1
+          fi

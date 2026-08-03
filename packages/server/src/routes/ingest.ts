@@ -34,7 +34,14 @@ export function registerIngestRoutes(
   config: Config,
   blobs: BlobStore | null,
 ): void {
-  app.post("/v1/traces", async (request, reply) => {
+  app.post("/v1/traces", {
+    config: {
+      rateLimit: {
+        max: config.RATE_LIMIT_INGEST_PER_MIN,
+        timeWindow: "1 minute",
+      },
+    },
+  }, async (request, reply) => {
     // --- auth -----------------------------------------------------------
     const auth = request.headers.authorization;
     const presented = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
@@ -79,6 +86,27 @@ export function registerIngestRoutes(
         .code(503)
         .header("Retry-After", "2")
         .send({ error: "overloaded", message: "Batch exceeds queue capacity." });
+    }
+
+    // --- storage quota ----------------------------------------------------
+    // The rate limit caps requests per minute; this caps total stored data.
+    // Without it, a leaked ingest key could fill Neon's 0.5 GB free tier at a
+    // perfectly polite request rate and take the demo down.
+    //
+    // Counted from the denormalised rollup on `traces` rather than
+    // COUNT(*) FROM spans, so this is an index-only scan of a small table
+    // instead of a full scan of the largest one on every ingest.
+    const [usage] = await sql<{ spans: string }[]>`
+      SELECT COALESCE(SUM(span_count), 0)::text AS spans
+      FROM traces WHERE project_id = ${project.id}
+    `;
+    if (Number(usage?.spans ?? 0) >= config.MAX_SPANS_PER_PROJECT) {
+      return reply.code(429).send({
+        error: "quota_exceeded",
+        message:
+          `Project has reached its span limit (${config.MAX_SPANS_PER_PROJECT}). ` +
+          `Delete old traces or raise MAX_SPANS_PER_PROJECT.`,
+      });
     }
 
     // --- write ----------------------------------------------------------

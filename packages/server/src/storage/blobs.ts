@@ -23,6 +23,10 @@ export interface BlobStoreOptions {
   secretAccessKey: string;
   region?: string;
   inlineLimitBytes: number;
+  /** Reject payloads larger than this rather than storing them. */
+  maxPayloadBytes: number;
+  /** Stop offloading once stored bytes reach this, across all projects. */
+  maxStorageBytes: number;
 }
 
 /**
@@ -40,10 +44,14 @@ export class BlobStore {
   readonly #s3: S3Client;
   readonly #bucket: string;
   readonly #inlineLimit: number;
+  readonly #maxPayloadBytes: number;
+  readonly #maxStorageBytes: number;
 
   constructor(opts: BlobStoreOptions) {
     this.#bucket = opts.bucket;
     this.#inlineLimit = opts.inlineLimitBytes;
+    this.#maxPayloadBytes = opts.maxPayloadBytes;
+    this.#maxStorageBytes = opts.maxStorageBytes;
     this.#s3 = new S3Client({
       endpoint: opts.endpoint,
       region: opts.region ?? "auto",
@@ -84,8 +92,41 @@ export class BlobStore {
         continue;
       }
 
+      // Oversized single payload: store a marker instead. A prompt this large
+      // is not readable in a UI anyway, and accepting it is the cheapest way
+      // for a caller to inflate storage per request.
+      if (bytes > this.#maxPayloadBytes) {
+        out[key] = {
+          storage: "inline",
+          data: {
+            __truncated: true,
+            reason: `payload exceeds ${this.#maxPayloadBytes} byte limit`,
+            originalBytes: bytes,
+          },
+        };
+        continue;
+      }
+
       const sha256 = createHash("sha256").update(json).digest("hex");
       const objectKey = `payloads/${sha256.slice(0, 2)}/${sha256}.gz`;
+
+      // Global byte ceiling. Checked per payload rather than per batch so a
+      // single huge batch cannot overshoot it. Deduped content is exempt: it
+      // adds a reference, not bytes.
+      const [alreadyStored] = await sql<{ sha256: string }[]>`
+        SELECT sha256 FROM payload_blobs WHERE sha256 = ${sha256} LIMIT 1
+      `;
+      if (!alreadyStored && (await this.#storedBytes(sql)) + bytes > this.#maxStorageBytes) {
+        out[key] = {
+          storage: "inline",
+          data: {
+            __truncated: true,
+            reason: "storage quota reached — payload not retained",
+            originalBytes: bytes,
+          },
+        };
+        continue;
+      }
 
       const existed = await this.#putIfAbsent(sql, sha256, objectKey, json, bytes);
       if (existed) deduped++;
@@ -144,6 +185,27 @@ export class BlobStore {
 
     return false;
   }
+
+  /**
+   * Total compressed bytes currently in object storage.
+   *
+   * Cached for a few seconds: this runs per offloaded payload, and an
+   * uncached aggregate on every one would be a self-inflicted hot spot.
+   */
+  async #storedBytes(sql: Queryable): Promise<number> {
+    const now = Date.now();
+    if (this.#storedBytesCache && now - this.#storedBytesCache.at < 5_000) {
+      return this.#storedBytesCache.value;
+    }
+    const [row] = await sql<{ total: string }[]>`
+      SELECT COALESCE(SUM(stored_bytes), 0)::text AS total FROM payload_blobs
+    `;
+    const value = Number(row?.total ?? 0);
+    this.#storedBytesCache = { value, at: now };
+    return value;
+  }
+
+  #storedBytesCache: { value: number; at: number } | null = null;
 
   /** Fetch and decompress a payload by object key. */
   async fetch(objectKey: string): Promise<unknown> {

@@ -284,6 +284,107 @@ commands instead of a 20-line stack trace.
 
 ---
 
+## 6a. Abuse protection — worth talking through in an interview
+
+This started as a user question ("what if someone spams requests and I get
+billed?") and turned into a real design gap. The *reasoning* is the interesting
+part, not the feature list.
+
+### Step 1 — locate the actual attack surface
+
+The instinct was that Cloudflare R2 was the exposure. It is not: the bucket has
+no public URL and no presigned uploads, so the only writer is the collector, and
+only after a request passes auth. R2's free tier is also 10 GB with **no egress
+fees**, and measured compression here is 234×.
+
+The real exposure was the ingest endpoint — which, on checking, had **no rate
+limiting at all**.
+
+### Step 2 — rule out the scenario that cannot happen
+
+Next question: "couldn't someone create 100,000 accounts?" Enumerating every
+route showed **six endpoints, none of which creates a project**. The only
+`INSERT INTO projects` lives in `migrate.ts`, a CLI script run from a laptop
+with the database URL — unreachable over HTTP.
+
+So there is no signup, and the attacker has exactly one path: steal the single
+ingest key.
+
+Worth saying plainly in an interview: *the first fix is knowing which threats
+are real.* A signup-flooding defence here would have been effort spent on a
+threat the architecture already precludes.
+
+### Step 3 — find the gap that was real
+
+The first fix added a span quota. Then the arithmetic:
+
+```
+250,000 spans × unique 100 KB payloads = ~24 GB  →  238% of R2's 10 GB free tier
+```
+
+**A row quota does not bound bytes.** Unique payloads defeat content-addressed
+dedup completely — different content, different hash, nothing collapses — so an
+attacker could stay entirely inside the row limit and still blow past the free
+tier. The row quota protected Postgres and did nothing for the storage bill.
+
+### The four layers, and what each is actually for
+
+| Layer | Default | Bounds | Env var |
+| ----- | ------- | ------ | ------- |
+| Ingest rate limit (per API key) | 120/min | request rate | `RATE_LIMIT_INGEST_PER_MIN` |
+| Read rate limit (per IP) | 300/min | scraping the public UI | `RATE_LIMIT_READ_PER_MIN` |
+| Spans per project | 250,000 | Postgres rows (Neon 0.5 GB) | `MAX_SPANS_PER_PROJECT` |
+| **Stored bytes (global)** | **5 GB** | **the R2 bill** | `MAX_STORAGE_BYTES` |
+| Single payload size | 1 MB | per-request inflation | `MAX_PAYLOAD_BYTES` |
+
+Rate limits bound requests *per minute*; the quotas bound *cumulative* data. A
+polite attacker under the rate limit could still fill storage over days — which
+is exactly why both kinds are needed.
+
+### Design details worth defending
+
+- **Ingest is keyed by API key, not IP.** An SDK behind a corporate NAT shares
+  one IP with everyone there, so an IP-keyed limit throttles honest users, while
+  a key leaked across many IPs slips straight through. Read routes are keyed by
+  IP because they are unauthenticated.
+- **Deduped content is exempt from the byte ceiling** — it adds a reference, not
+  bytes, so a legitimate repeated system prompt keeps working at quota.
+- **Over-quota degrades, it does not reject.** The span still ingests (202) and
+  the payload is replaced with a `__truncated` marker explaining why. Losing one
+  blob is better than losing the trace.
+- **The span quota reads `SUM(span_count)` from `traces`**, not
+  `COUNT(*) FROM spans` — reusing the denormalised rollup means a small-table
+  scan instead of scanning the largest table on every ingest.
+- **`SUM(stored_bytes)` is cached 5 s.** It runs per offloaded payload; an
+  uncached aggregate on each would be a self-inflicted hot spot.
+
+### Verified, not assumed
+
+Tested with deliberately tiny limits (`MAX_PAYLOAD_BYTES=20000`,
+`MAX_STORAGE_BYTES=3000`):
+
+```
+oversized 50KB        HTTP 202  → {"__truncated":true,"reason":"payload exceeds 20000 byte limit"}
+10KB w/ 3KB ceiling   HTTP 202  → {"__truncated":true,"reason":"storage quota reached"}
+blob ledger: 0 blobs, 0 bytes   → nothing reached storage
+```
+
+Rate limiting verified separately: with `RATE_LIMIT_READ_PER_MIN=5`, requests
+1–5 returned 200 and 6–8 returned 429.
+
+### Known limits — say these before being asked
+
+- **Counters are in-memory**, so they are per-instance. Correct for one Render
+  service; a multi-instance deployment needs Redis. This is a scaling seam, not
+  an oversight.
+- **No key rotation endpoint.** A leaked key means deleting the project row
+  (spans cascade) and re-running `db:migrate`.
+- **No GC for orphaned blobs.** `ref_count` increments but never decrements, so
+  deleting traces leaves objects in storage. Bounded by `MAX_STORAGE_BYTES` so
+  it cannot run away, but the reclamation path does not exist.
+
+---
+
 ## 7. Running it
 
 ```bash
@@ -388,11 +489,24 @@ close the pool. `kill -9` skips that and leaks a Neon connection slot.
 
 - Live view via Redis pub/sub — `GET /v1/live` (SSE) is designed, not
   implemented.
-- Deployment to Vercel + Render/Railway. Note Render's free tier sleeps after
-  inactivity (~30s cold start on a recruiter's click); mitigate with a keep-alive
-  ping, Railway, or a seeded read-only demo trace.
+- Deployment is *configured* but not yet executed: `render.yaml`, `vercel.json`,
+  `DEPLOY.md`, and `.github/workflows/keepalive.yml` are written and both build
+  commands verified locally. Nothing is live yet.
+
+  Render's free tier sleeps after ~15 min idle (~30 s cold start on a
+  recruiter's click). The keep-alive workflow pings **`/health`, not `/ready`**
+  — `/health` deliberately does not touch Postgres, because a DB-touching ping
+  every 10 minutes would burn ~90 of Neon's 100 free CU-hours per month purely
+  to avoid a cold start. Verified by stopping Postgres: `/health` returned 200,
+  `/ready` returned 503.
 - `ref_count` on `payload_blobs` increments but nothing decrements it — there is
-  no GC for orphaned blobs. Fine at this scale, worth naming if asked.
+  no GC for orphaned blobs. Now bounded by `MAX_STORAGE_BYTES` so it cannot run
+  away, but the reclamation path still does not exist. Confirmed during quota
+  testing: truncating the ledger left 4 objects orphaned in MinIO.
+- Rate-limit counters are in-memory and therefore per-instance. Correct for a
+  single Render service; multi-instance needs Redis (§6a).
+- No key-rotation endpoint. A leaked ingest key means deleting the project row
+  and re-running `db:migrate`.
 - Head-based sampling (`sampleRate`) — a designed seam, not written.
 
 **Scaling seams (for interviews, not to build)**

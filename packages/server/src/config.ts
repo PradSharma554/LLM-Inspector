@@ -38,6 +38,48 @@ const ConfigSchema = z.object({
   S3_ACCESS_KEY_ID: z.string().optional(),
   S3_SECRET_ACCESS_KEY: z.string().optional(),
   S3_REGION: z.string().default("auto"),
+
+  // --- Abuse limits ---------------------------------------------------------
+  // A public collector on a free tier needs a ceiling. Without one, a leaked
+  // ingest key lets someone exhaust Neon's 0.5 GB and take the demo down.
+
+  /** Ingest requests per minute, per API key. */
+  RATE_LIMIT_INGEST_PER_MIN: z.coerce.number().int().positive().default(120),
+
+  /** Read requests per minute, per IP. The UI is public and unauthenticated. */
+  RATE_LIMIT_READ_PER_MIN: z.coerce.number().int().positive().default(300),
+
+  /**
+   * Hard ceiling on stored spans per project. Past this, ingest is refused with
+   * 429 rather than silently filling the database.
+   *
+   * At ~1-2 KB per span row, 500k spans is roughly Neon's 0.5 GB free tier.
+   * Default is deliberately well below that.
+   */
+  MAX_SPANS_PER_PROJECT: z.coerce.number().int().positive().default(250_000),
+
+  /**
+   * Hard ceiling on bytes written to object storage, across all projects.
+   *
+   * This is the quota that actually caps the bill, and it is separate from the
+   * span count on purpose: the span quota bounds ROWS, not BYTES. An attacker
+   * sending 250k spans each carrying a unique 100 KB payload defeats
+   * content-addressed dedup completely (different content, different hash) and
+   * would write ~24 GB — well past R2's 10 GB free tier — while staying inside
+   * the row quota.
+   *
+   * Default 5 GB: half the free tier, so there is headroom before any charge.
+   */
+  MAX_STORAGE_BYTES: z.coerce.number().int().positive().default(5 * 1024 * 1024 * 1024),
+
+  /**
+   * Largest single payload accepted for offload. Bigger ones are truncated
+   * with a marker rather than stored.
+   *
+   * A prompt or completion beyond this is not useful to read in a UI anyway,
+   * and refusing it removes the cheapest way to inflate storage per request.
+   */
+  MAX_PAYLOAD_BYTES: z.coerce.number().int().positive().default(1024 * 1024),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -65,5 +107,7 @@ export function blobConfig(c: Config) {
     secretAccessKey: c.S3_SECRET_ACCESS_KEY,
     region: c.S3_REGION,
     inlineLimitBytes: c.PAYLOAD_INLINE_LIMIT_BYTES,
+    maxPayloadBytes: c.MAX_PAYLOAD_BYTES,
+    maxStorageBytes: c.MAX_STORAGE_BYTES,
   };
 }

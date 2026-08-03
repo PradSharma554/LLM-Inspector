@@ -3,6 +3,7 @@ import { z } from "zod";
 import { buildSpanTree, type Span } from "@llm-inspector/protocol";
 import type { Sql } from "../db/client.js";
 import type { BlobStore } from "../storage/blobs.js";
+import type { Config } from "../config.js";
 
 const ListQuery = z.object({
   projectId: z.uuid().optional(),
@@ -16,7 +17,16 @@ export function registerQueryRoutes(
   app: FastifyInstance,
   sql: Sql,
   blobs: BlobStore | null = null,
+  config?: Config,
 ): void {
+  // Read routes are public and unauthenticated (the UI calls them from the
+  // browser), so they are keyed by IP. A generous ceiling: enough for normal
+  // browsing, low enough that a scraper cannot hammer Neon indefinitely.
+  const readLimit = {
+    config: {
+      rateLimit: { max: config?.RATE_LIMIT_READ_PER_MIN ?? 300, timeWindow: "1 minute" },
+    },
+  };
   /**
    * Trace list. Hits only the `traces` table — never aggregates over spans,
    * which is why rollups are denormalised at ingest.
@@ -25,7 +35,7 @@ export function registerQueryRoutes(
    * and discards rows, so deep pages get progressively slower, and rows shifting
    * between requests cause items to be skipped or repeated.
    */
-  app.get("/v1/traces", async (request, reply) => {
+  app.get("/v1/traces", readLimit, async (request, reply) => {
     const parsed = ListQuery.safeParse(request.query);
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid_query", message: parsed.error.message });
@@ -57,7 +67,7 @@ export function registerQueryRoutes(
    * the (trace_id, start_ns) index directly, and the same buildSpanTree() runs
    * in the browser — one implementation, tested once.
    */
-  app.get<{ Params: { id: string } }>("/v1/traces/:id", async (request, reply) => {
+  app.get<{ Params: { id: string } }>("/v1/traces/:id", readLimit, async (request, reply) => {
     const id = z.uuid().safeParse(request.params.id);
     if (!id.success) {
       return reply.code(400).send({ error: "invalid_id", message: "Malformed trace id." });
@@ -85,6 +95,7 @@ export function registerQueryRoutes(
    */
   app.get<{ Params: { id: string }; Querystring: { key?: string } }>(
     "/v1/spans/:id/payload",
+    readLimit,
     async (request, reply) => {
       const id = z.uuid().safeParse(request.params.id);
       if (!id.success) {
@@ -126,7 +137,7 @@ export function registerQueryRoutes(
    * Worth exposing rather than hiding: on a 0.5 GB free tier this ratio is the
    * difference between a usable tool and one that fills up mid-demo.
    */
-  app.get("/v1/stats/storage", async (_request, reply) => {
+  app.get("/v1/stats/storage", readLimit, async (_request, reply) => {
     const [stats] = await sql<
       { blobs: string; logical_bytes: string; stored_bytes: string; total_refs: string }[]
     >`
