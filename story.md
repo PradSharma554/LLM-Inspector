@@ -385,6 +385,73 @@ Rate limiting verified separately: with `RATE_LIMIT_READ_PER_MIN=5`, requests
 
 ---
 
+## 6b. Deployment — and reusing conventions instead of inventing them
+
+### How deploys are triggered
+
+Render's GitHub App auto-deploy is **not used on this account**, so pushing to
+`main` does not deploy anything by itself. Instead
+`.github/workflows/deploy-backend.yml` POSTs the service's Deploy Hook
+(`RENDER_DEPLOY_HOOK` repo secret) on any push touching:
+
+```
+packages/server/**      packages/protocol/**      pnpm-lock.yaml      render.yaml
+```
+
+`packages/protocol/**` is in that list deliberately: the collector imports it via
+`workspace:*`, so a protocol-only change still needs a redeploy even though
+nothing under `packages/server/` was touched. Missing that would produce a
+collector running against a stale copy of the wire schema — the exact class of
+bug the shared-protocol design exists to prevent.
+
+Setup is two settings: `RENDER_DEPLOY_HOOK` (secret) and `BACKEND_URL`
+(variable). Until the secret exists the workflow skips quietly rather than
+failing, so the repo is not red before it is configured.
+
+### The part worth mentioning in an interview
+
+This pattern was **not designed here — it was copied from CloudAIr**, which
+already had `deploy-backend.yml` doing exactly this, with a comment explaining
+that Render's auto-deploy had proven unreliable for that repo.
+
+Two things follow from that, both worth saying out loud:
+
+1. **I initially assumed auto-deploy and was wrong.** After pushing, I was about
+   to poll the service waiting for a new build that would never arrive. The user
+   corrected it. The fix was to go *read the existing project's workflow* and
+   match it, rather than inventing a second convention for the same account.
+
+2. **CloudAIr's keepalive had already solved the Neon CU-hours problem.** It
+   pings `/ping` rather than `/healthz`, with a comment noting that the deep
+   check queries Neon and would keep its compute awake around the clock. That is
+   the same conclusion §6a reaches independently — arrived at there by
+   arithmetic, but it already existed in the codebase next door.
+
+   The honest lesson: the reasoning in §6a is sound, but a quick look at the
+   sibling project would have reached it faster. Consistency across an account's
+   projects is worth more than a locally optimal design, because a reviewer (or
+   future you) only has to learn one pattern.
+
+Concrete conventions inherited rather than re-invented: `vars.BACKEND_URL` (not
+a new `COLLECTOR_URL`), `--max-time 90` for a waking free instance, `|| true` so
+a missed ping does not raise a red run, and the note that keeping a free
+instance permanently warm is a gray area under Render's ToS.
+
+### Deployment status
+
+The collector is **live** at `llm-inspector-collector.onrender.com`: `/health`
+returns 200 in ~1 s and `/v1/traces` serves real data from Neon. Not yet done:
+R2 credentials (payloads currently stay inline in Postgres) and the Vercel UI.
+
+Verifying a deploy is more than checking that the dashboard says "live" — Render
+reports a service as running even while it crash-loops. The useful checks are
+`/health` (process up), `/ready` (Postgres reachable), and an actual data
+endpoint. Doing that here is what revealed the running build predated the
+abuse-protection commit: `/ready` returned 404 because it did not exist yet in
+the deployed code.
+
+---
+
 ## 7. Running it
 
 ```bash
@@ -489,18 +556,11 @@ close the pool. `kill -9` skips that and leaks a Neon connection slot.
 
 - Live view via Redis pub/sub — `GET /v1/live` (SSE) is designed, not
   implemented.
-- **The collector is deployed and serving** at
-  `llm-inspector-collector.onrender.com` — `/health` 200 in ~1s, `/v1/traces`
-  returning real data from Neon. The UI (Vercel) and R2 are not yet set up, so
-  payloads currently stay inline in Postgres.
-
-  **Deploys are triggered by hook, not by Render's GitHub App.** Auto-deploy is
-  not used on this account, so `.github/workflows/deploy-backend.yml` POSTs the
-  service's Deploy Hook (`RENDER_DEPLOY_HOOK` secret) on any push touching
-  `packages/server/**`, `packages/protocol/**`, `pnpm-lock.yaml`, or
-  `render.yaml` — matching the pattern already used in CloudAIr. Protocol is in
-  that list deliberately: the collector imports it via `workspace:*`, so a
-  protocol-only change still needs a redeploy.
+- Collector is live; **R2 and the Vercel UI are not set up yet**, so payloads
+  currently stay inline in Postgres. See §6b for deploy mechanics and status.
+- **`RENDER_DEPLOY_HOOK` and `BACKEND_URL` are not yet configured on GitHub**, so
+  the abuse-protection commit is pushed but the running instance still predates
+  it. Trigger a deploy (dashboard or hook) to close that gap.
 
   Render's free tier sleeps after ~15 min idle (~30 s cold start on a
   recruiter's click). The keep-alive workflow pings **`/health`, not `/ready`**
