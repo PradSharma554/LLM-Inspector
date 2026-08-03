@@ -140,6 +140,25 @@ SHA-256 is stored and it cannot be recovered.**
 browser, so the value has to be inlined into the client bundle. Changing it
 later needs a redeploy, not just an env-var edit.
 
+**Two settings must be right in the Vercel project itself**, and dashboard
+values override `vercel.json`:
+
+| Setting | Value | Why |
+| ------- | ----- | --- |
+| Framework Preset | **Next.js** | With `Other`, Vercel cannot locate `.next` on its own and falls back to the Output Directory setting |
+| Output Directory | **Auto** | An explicit `apps/web/.next` is resolved relative to the build output and doubles into `apps/web/apps/web/.next` |
+| Root Directory | `.` (repo root) | The web app imports `@llm-inspector/protocol` via `workspace:*`, so the whole workspace must install |
+
+From the CLI:
+
+```bash
+vercel project update llm-inspector --framework nextjs --auto-detect output-directory
+```
+
+Note `vercel.json` rejects unknown properties — a `"//"` comment key fails schema
+validation with *"should NOT have additional property"*. Keep the rationale in
+this file instead.
+
 ## 7. Send a trace
 
 ```bash

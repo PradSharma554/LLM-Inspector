@@ -1,21 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-
-  "//": [
-    "Vercel's project Root Directory is the repo root, so paths here are",
-    "relative to the repo root.",
-    "",
-    "outputDirectory is deliberately NOT set. The nextjs framework preset finds",
-    ".next on its own, and naming it explicitly caused a deploy failure: Vercel",
-    "resolved it against the build's working directory and looked for",
-    "apps/web/apps/web/.next.",
-    "",
-    "The build must run from the repo root because the web app imports",
-    "@llm-inspector/protocol via workspace:*, which has to be installed and",
-    "built before Next can compile."
-  ],
-
-  "installCommand": "pnpm install --frozen-lockfile",
-  "buildCommand": "pnpm --filter @llm-inspector/protocol build && pnpm --filter @llm-inspector/web build"
+  "installCommand": "cd ../.. && pnpm install --frozen-lockfile",
+  "buildCommand": "cd ../.. && pnpm --filter @llm-inspector/protocol build && pnpm --filter @llm-inspector/web build"
 }
