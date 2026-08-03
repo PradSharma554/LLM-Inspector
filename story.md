@@ -4,7 +4,7 @@ A record of how this project was built: the decisions, the reasoning behind
 them, the bugs hit along the way, and what is still outstanding. Written so the
 context survives past the session that produced it.
 
-Built 2026-08-01 → 2026-08-02.
+Built 2026-08-01 → 2026-08-03. Deployed and verified end to end.
 
 ---
 
@@ -46,8 +46,9 @@ Postgres holds what you **query, sort, filter, aggregate**. R2 holds what you
 only ever **fetch by key when a user clicks a span**.
 
 Payloads are stored under `sha256(content)`, so a repeated system prompt costs
-one object however many traces reference it. **Measured on demo data: 92,202 B
-logical → 393 B stored, 234× reduction** (dedup + gzip).
+one object however many traces reference it. Measured on demo data: **92,202 B
+logical → 393 B stored, 234×** locally (MinIO), and **72,656 B → 290 B, 250×**
+against production Cloudflare R2.
 
 ### 2.2 Cost is wrong unless you account for prompt caching
 
@@ -126,12 +127,19 @@ llm-inspector/
 ├── README.md
 ├── story.md                this file
 ├── examples/agent-demo.mjs runs with no API key
+├── DEPLOY.md               deployment runbook
+├── render.yaml             collector blueprint
+├── vercel.json             UI build config
+├── .github/workflows/      deploy-backend.yml, keepalive.yml
 ├── packages/
 │   ├── protocol/           zod schemas, pricing, tree assembly   15 tests
 │   ├── server/             Fastify collector + query API + R2
 │   └── sdk/                wrap(), AsyncLocalStorage, TTFT       26 tests
 └── apps/web/               Next.js 16 DevTools UI
 ```
+
+**Live:** UI at `llm-inspector.vercel.app`, collector at
+`llm-inspector-collector.onrender.com`.
 
 **41 tests passing.** Verified against local Postgres 17 *and* Neon 18.4.
 
@@ -437,11 +445,15 @@ a new `COLLECTOR_URL`), `--max-time 90` for a waking free instance, `|| true` so
 a missed ping does not raise a red run, and the note that keeping a free
 instance permanently warm is a gray area under Render's ToS.
 
-### Deployment status
+### Deployment status — fully live
 
-The collector is **live** at `llm-inspector-collector.onrender.com`: `/health`
-returns 200 in ~1 s and `/v1/traces` serves real data from Neon. Not yet done:
-R2 credentials (payloads currently stay inline in Postgres) and the Vercel UI.
+| Component | Where | Verified |
+| --------- | ----- | -------- |
+| Collector | `llm-inspector-collector.onrender.com` | `/health` 200, rate limits + quotas active |
+| Database | Neon Postgres 18.4 | `/ready` reports `database: reachable` |
+| Payloads | Cloudflare R2 | 72,656 B logical → 290 B stored, **250×** |
+| UI | `llm-inspector.vercel.app` | renders live traces from Neon |
+| CI | GitHub Actions | deploy hook + keepalive, both run green |
 
 Verifying a deploy is more than checking that the dashboard says "live" — Render
 reports a service as running even while it crash-loops. The useful checks are
@@ -449,6 +461,68 @@ reports a service as running even while it crash-loops. The useful checks are
 endpoint. Doing that here is what revealed the running build predated the
 abuse-protection commit: `/ready` returned 404 because it did not exist yet in
 the deployed code.
+
+### Vercel: three stacked failures
+
+Worth knowing because each one masked the next, and the error message only ever
+described the outermost:
+
+1. **Explicit `outputDirectory: "apps/web/.next"`** — Vercel resolved it relative
+   to the build output, producing `apps/web/apps/web/.next`. The `nextjs` preset
+   finds `.next` on its own; naming it was both redundant and the failure.
+2. **A `"//"` comment array in `vercel.json`** — the schema rejects unknown
+   properties outright ("should NOT have additional property"). JSON has no
+   comments; the rationale belongs in `DEPLOY.md`.
+3. **Framework preset was `Other`** — the actual root cause, invisible until the
+   first two cleared. Vercel could not identify the app as Next at all.
+
+The awkward part is a genuine tension: **the `nextjs` preset and the pnpm
+workspace want opposite root directories.** The preset looks for `next` in the
+Root Directory's `package.json`, so it needs `apps/web`. But
+`@llm-inspector/protocol` is a `workspace:*` dependency that must install from
+the repo root. Resolved with Root Directory `apps/web` plus `cd ../..` in both
+the install and build commands.
+
+Process note: I flip-flopped on the root directory twice, reasoning from a
+screenshot instead of running `vercel project inspect`, which shows the real
+settings in one command. **Read the actual configuration before theorising about
+it** — the same lesson as §5.1, where the fix only appeared after reading the
+stored rows rather than trusting a 202.
+
+### The R2 bug my own error handling hid
+
+Symptom: ingest returned `202 {"uploaded": 0}` with an empty blob ledger, while
+all four `S3_*` env vars were present and correctly named.
+
+Cause: `S3_BUCKET` was `LLM-Inspector-Payloads`; the actual R2 bucket was
+lowercase. S3 bucket names are case-sensitive, so every `PutObject` failed with
+`NoSuchBucket`.
+
+**What made it slow to find was this code, which I wrote:**
+
+```ts
+} catch (err) {
+  // Storage failure must not lose the span. Keep payloads inline and carry on.
+  request.log.error({ err }, "payload offload failed — keeping inline");
+}
+```
+
+Graceful degradation working exactly as designed — and making the failure
+invisible from outside. A misconfigured bucket and a missing env var produced
+byte-identical observable behaviour: 202, `uploaded: 0`, empty ledger.
+
+The lesson is not "don't degrade gracefully" — degrading is right, losing spans
+because storage is down would be worse. It is that **a swallowed error still
+needs an outward signal.** Two were added:
+
+- `/v1/stats/storage` now reports `objectStorage: "configured" | "not_configured"`,
+  which distinguishes *never wired up* from *wired up but failing*
+- the ingest response echoes `offloadError` when an upload throws, so a caller
+  sees the failure without access to server logs
+
+This is the same class of bug as §5.2 (the flat span tree that 26 unit tests
+passed on): the system reported success while doing the wrong thing. Both were
+found by checking the *result* rather than the *status*.
 
 ---
 
@@ -538,45 +612,43 @@ close the pool. `kill -9` skips that and leaks a Neon connection slot.
 
 ## 10. Outstanding
 
-**Security**
+Everything is deployed and working end to end. What follows is what remains.
 
-- [ ] **Rotate the Neon password** — it was pasted into chat and is in history.
-- [ ] `git init` — `.gitignore` is written and covers `.env`, but nothing is
-      committed yet.
+**Security — do these**
+
+- [ ] **Rotate the Neon password.** Pasted into a chat session; treat as
+      compromised. Neon Console → Roles → Reset password, then update Render's
+      `DATABASE_URL` and the local `.env`.
+- [ ] **Regenerate the Render deploy hook.** Also pasted into chat. Render →
+      Settings → Deploy Hook, then `gh secret set RENDER_DEPLOY_HOOK` (which
+      prompts without echoing, unlike passing it on a command line).
 
 **Correctness**
 
 - [ ] The demo uses a fake client emitting real Anthropic stream event shapes.
       The instrumentation path is genuinely exercised, but it has **never run
       against the live Anthropic API**. Swapping `new FakeAnthropic()` for
-      `new Anthropic()` is the only change needed — worth doing once, since it's
-      the first thing a reviewer would try.
+      `new Anthropic()` is the only change needed — worth doing once, since it
+      is the first thing a reviewer would try.
+
+**Known gaps (bounded, not urgent)**
+
+- **No GC for orphaned blobs.** `ref_count` on `payload_blobs` increments but
+  nothing decrements it, so deleting traces leaves objects in R2. Bounded by
+  `MAX_STORAGE_BYTES` so it cannot run away, but the reclamation path does not
+  exist. Confirmed during quota testing: truncating the ledger left 4 objects
+  orphaned in MinIO.
+- **Rate-limit counters are in-memory**, therefore per-instance. Correct for one
+  Render service; multi-instance needs Redis (§6a).
+- **No key-rotation endpoint.** A leaked ingest key means deleting the project
+  row (spans cascade) and re-running `db:migrate`.
 
 **Not built (deliberately deferred)**
 
-- Live view via Redis pub/sub — `GET /v1/live` (SSE) is designed, not
-  implemented.
-- Collector is live; **R2 and the Vercel UI are not set up yet**, so payloads
-  currently stay inline in Postgres. See §6b for deploy mechanics and status.
-- **`RENDER_DEPLOY_HOOK` and `BACKEND_URL` are not yet configured on GitHub**, so
-  the abuse-protection commit is pushed but the running instance still predates
-  it. Trigger a deploy (dashboard or hook) to close that gap.
-
-  Render's free tier sleeps after ~15 min idle (~30 s cold start on a
-  recruiter's click). The keep-alive workflow pings **`/health`, not `/ready`**
-  — `/health` deliberately does not touch Postgres, because a DB-touching ping
-  every 10 minutes would burn ~90 of Neon's 100 free CU-hours per month purely
-  to avoid a cold start. Verified by stopping Postgres: `/health` returned 200,
-  `/ready` returned 503.
-- `ref_count` on `payload_blobs` increments but nothing decrements it — there is
-  no GC for orphaned blobs. Now bounded by `MAX_STORAGE_BYTES` so it cannot run
-  away, but the reclamation path still does not exist. Confirmed during quota
-  testing: truncating the ledger left 4 objects orphaned in MinIO.
-- Rate-limit counters are in-memory and therefore per-instance. Correct for a
-  single Render service; multi-instance needs Redis (§6a).
-- No key-rotation endpoint. A leaked ingest key means deleting the project row
-  and re-running `db:migrate`.
-- Head-based sampling (`sampleRate`) — a designed seam, not written.
+- Live view via Redis pub/sub — `GET /v1/live` (SSE) is designed, not written.
+  Redis runs locally in docker-compose but is unused; it is not provisioned in
+  production at all.
+- Head-based sampling (`sampleRate`) — a designed seam in the SDK, not written.
 
 **Scaling seams (for interviews, not to build)**
 

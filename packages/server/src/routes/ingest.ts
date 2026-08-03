@@ -122,6 +122,7 @@ export function registerIngestRoutes(
     let spans = batch.spans;
     let uploaded = 0;
     let deduped = 0;
+    let offloadError: string | null = null;
 
     if (blobs) {
       try {
@@ -136,6 +137,13 @@ export function registerIngestRoutes(
       } catch (err) {
         // Storage failure must not lose the span. Keep payloads inline and
         // carry on: degraded observability beats dropped observability.
+        //
+        // But do NOT hide it. This swallow once masked a misconfigured bucket
+        // name for an entire debugging session: uploads threw, spans still
+        // returned 202, and the only outward symptom was a stubbornly empty
+        // blob ledger. The reason is echoed in the response so a caller can
+        // see it without access to the server logs.
+        offloadError = err instanceof Error ? err.name : "unknown";
         request.log.error({ err }, "payload offload failed — keeping inline");
       }
     }
@@ -147,6 +155,11 @@ export function registerIngestRoutes(
       await recomputeRollups(tx, traceIds);
     });
 
-    return reply.code(202).send({ accepted: spans.length, uploaded, deduped });
+    return reply.code(202).send({
+      accepted: spans.length,
+      uploaded,
+      deduped,
+      ...(offloadError ? { offloadError } : {}),
+    });
   });
 }

@@ -152,6 +152,14 @@ export function registerQueryRoutes(
     const stored = Number(stats?.stored_bytes ?? 0);
 
     return reply.send({
+      // Whether object storage is wired up at all.
+      //
+      // Surfaced deliberately: when the S3_* env vars are missing the collector
+      // logs a warning and keeps payloads inline, which is right for local dev
+      // but invisible from outside in production — the only symptom is a
+      // stubbornly empty blob ledger. Reporting it here makes a misconfigured
+      // deploy diagnosable with one request.
+      objectStorage: blobs ? "configured" : "not_configured",
       blobs: Number(stats?.blobs ?? 0),
       totalReferences: Number(stats?.total_refs ?? 0),
       logicalBytes: logical,

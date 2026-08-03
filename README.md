@@ -4,8 +4,12 @@ Chrome DevTools for AI applications. Trace and inspect every stage of an LLM
 request — prompt assembly, retrieval, model calls, tool calls, streaming tokens,
 retries, and cost — instead of seeing only the final answer.
 
-> Status: complete and working end to end — SDK, collector, payload offload, and
-> DevTools UI. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
+> **Live:** [llm-inspector.vercel.app](https://llm-inspector.vercel.app) —
+> UI on Vercel, collector on Render, Postgres on Neon, payloads on Cloudflare R2.
+>
+> Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) ·
+> Build story and decisions: [story.md](story.md) ·
+> Deployment: [DEPLOY.md](DEPLOY.md)
 
 ## Why this is not another wrapper that logs prompts
 
@@ -91,9 +95,15 @@ INSPECTOR_KEY=insp_... pnpm demo
 | `pnpm demo` | send a sample trace |
 | `pnpm test` | all 41 tests |
 
-## Verified
+## Verified in production
 
-Both local Postgres 17 and Neon Postgres 18.4, same migration and same results:
+Content-addressed dedup + gzip against Cloudflare R2:
+
+```
+72,656 B logical  →  290 B stored   (250× smaller)
+```
+
+Same migration and same results on both local Postgres 17 and Neon 18.4:
 
 ```
 POST /api/chat  spans=7 errors=1 tokens=102668 cost=$0.08099400 dur=4820ms
