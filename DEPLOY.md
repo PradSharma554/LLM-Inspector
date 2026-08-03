@@ -71,7 +71,23 @@ changes but the environment variables.
    | `S3_ACCESS_KEY_ID` | from step 2 |
    | `S3_SECRET_ACCESS_KEY` | from step 2 |
 
-4. Deploy, then verify:
+4. **Set up the deploy hook.** Render's GitHub App auto-deploy is not used on
+   this account, so deploys are triggered from CI instead:
+
+   - Render dashboard → your service → **Settings → Deploy Hook** → copy the URL
+   - GitHub → repo **Settings → Secrets and variables → Actions → Secrets** →
+     add `RENDER_DEPLOY_HOOK` with that URL
+
+   `.github/workflows/deploy-backend.yml` then POSTs it on any push touching
+   `packages/server/**`, `packages/protocol/**`, `pnpm-lock.yaml`, or
+   `render.yaml`. Protocol is included deliberately — the collector imports it
+   via `workspace:*`, so a protocol change needs a redeploy even when nothing
+   under `packages/server/` was touched.
+
+   Until the secret is set, the workflow skips quietly and you deploy manually
+   from the Render dashboard.
+
+5. Deploy, then verify:
 
    ```bash
    curl https://llm-inspector-collector.onrender.com/health   # process is up
@@ -95,7 +111,7 @@ is on Render, where env vars come from the dashboard. The blueprint's
 workspace and build protocol first. Building only `packages/server` fails to
 resolve the import.
 
-## 4. Migrate the production database
+## 5. Migrate the production database
 
 Run once against Neon, from your machine:
 
@@ -108,7 +124,7 @@ It is idempotent — already-applied migrations are skipped. On a database with
 no projects it prints a `PROJECT_ID` and `INGEST_KEY`. **Copy the key: only its
 SHA-256 is stored and it cannot be recovered.**
 
-## 5. Vercel — web UI
+## 6. Vercel — web UI
 
 1. [vercel.com/new](https://vercel.com/new) → import the repo.
 2. Leave the build settings alone; `vercel.json` handles the monorepo.
@@ -124,7 +140,7 @@ SHA-256 is stored and it cannot be recovered.**
 browser, so the value has to be inlined into the client bundle. Changing it
 later needs a redeploy, not just an env-var edit.
 
-## 6. Send a trace
+## 7. Send a trace
 
 ```bash
 INSPECTOR_ENDPOINT=https://llm-inspector-collector.onrender.com \
@@ -142,9 +158,12 @@ Render's free tier sleeps after ~15 minutes idle, so a recruiter clicking your
 link waits ~30 s on an empty page. Options, best first:
 
 1. **Keep-alive ping** — `.github/workflows/keepalive.yml` is in the repo. Set a
-   repository *variable* `COLLECTOR_URL` (Settings → Secrets and variables →
+   repository *variable* `BACKEND_URL` (Settings → Secrets and variables →
    Actions → Variables) to your Render URL, and it pings every ~12 minutes.
    Free on public repos.
+
+   Note: keeping a free instance permanently warm is a gray area under Render's
+   ToS. Delete the workflow if you would rather accept cold starts.
 
    **It pings `/health`, not `/ready`, and that distinction is the whole
    point.** `/health` deliberately does not touch Postgres. Render sleeps on

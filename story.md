@@ -489,9 +489,18 @@ close the pool. `kill -9` skips that and leaks a Neon connection slot.
 
 - Live view via Redis pub/sub — `GET /v1/live` (SSE) is designed, not
   implemented.
-- Deployment is *configured* but not yet executed: `render.yaml`, `vercel.json`,
-  `DEPLOY.md`, and `.github/workflows/keepalive.yml` are written and both build
-  commands verified locally. Nothing is live yet.
+- **The collector is deployed and serving** at
+  `llm-inspector-collector.onrender.com` — `/health` 200 in ~1s, `/v1/traces`
+  returning real data from Neon. The UI (Vercel) and R2 are not yet set up, so
+  payloads currently stay inline in Postgres.
+
+  **Deploys are triggered by hook, not by Render's GitHub App.** Auto-deploy is
+  not used on this account, so `.github/workflows/deploy-backend.yml` POSTs the
+  service's Deploy Hook (`RENDER_DEPLOY_HOOK` secret) on any push touching
+  `packages/server/**`, `packages/protocol/**`, `pnpm-lock.yaml`, or
+  `render.yaml` — matching the pattern already used in CloudAIr. Protocol is in
+  that list deliberately: the collector imports it via `workspace:*`, so a
+  protocol-only change still needs a redeploy.
 
   Render's free tier sleeps after ~15 min idle (~30 s cold start on a
   recruiter's click). The keep-alive workflow pings **`/health`, not `/ready`**

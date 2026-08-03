@@ -1,0 +1,34 @@
+# Render's GitHub App auto-deploy is not used for this account, so we trigger
+# deploys ourselves: on any collector change, curl the service's Deploy Hook
+# (Render dashboard → Settings → Deploy Hook, stored as the RENDER_DEPLOY_HOOK
+# repo secret). Skips quietly if the secret isn't set.
+#
+# Paths include the shared packages: the collector imports
+# @llm-inspector/protocol via `workspace:*`, so a protocol change needs a
+# redeploy even when nothing under packages/server/ was touched.
+name: deploy-backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/server/**"
+      - "packages/protocol/**"
+      - "pnpm-lock.yaml"
+      - "render.yaml"
+  workflow_dispatch:
+
+jobs:
+  trigger-render-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy hook
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "RENDER_DEPLOY_HOOK secret not set — skipping"
+            exit 0
+          fi
+          curl -sS -X POST "$HOOK"
+          echo "deploy triggered"
