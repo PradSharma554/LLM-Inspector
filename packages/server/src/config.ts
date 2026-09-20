@@ -42,6 +42,22 @@ const ConfigSchema = z.object({
   /** Max ingest body size. express.json defaults to 100 KB, which batched spans exceed. */
   BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(8 * 1024 * 1024),
 
+  // --- Live view (optional) -------------------------------------------------
+  // Without REDIS_URL the collector runs exactly as before and GET /v1/live
+  // reports 503. Redis is a fanout bus here, never a store: it is not
+  // provisioned in production today, and nothing durable may depend on it.
+  REDIS_URL: z.string().optional(),
+
+  /**
+   * Max concurrent SSE clients.
+   *
+   * /v1/live is unauthenticated and each client holds a socket open for as
+   * long as it wants, so it is the one endpoint where a caller can pin a
+   * resource indefinitely. Node's default is ~500-ish sockets before things
+   * degrade; this keeps well clear while being far more than a demo needs.
+   */
+  MAX_LIVE_CLIENTS: z.coerce.number().int().positive().default(50),
+
   // --- Object storage (payload offload) ------------------------------------
   // Optional: without these the collector keeps every payload inline in
   // Postgres, which is fine for local development but will exhaust a 0.5 GB

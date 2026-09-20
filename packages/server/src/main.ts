@@ -4,7 +4,7 @@ import { createDb } from "./db/client.js";
 
 const config = loadConfig();
 const sql = createDb(config);
-const { app, log } = buildApp(config, sql);
+const { app, log, bus } = buildApp(config, sql);
 
 const server = app.listen(config.PORT, config.HOST, () => {
   log.info({ port: config.PORT, host: config.HOST }, "collector listening");
@@ -43,8 +43,9 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
         log.error({ err }, "error during shutdown");
         process.exit(1);
       }
-      void sql
-        .end({ timeout: 5 })
+      void Promise.resolve(bus?.close())
+        .catch(() => {}) // a stuck Redis must not block the pool close
+        .then(() => sql.end({ timeout: 5 }))
         .then(() => process.exit(0))
         .catch((closeErr) => {
           log.error({ err: closeErr }, "error closing database pool");

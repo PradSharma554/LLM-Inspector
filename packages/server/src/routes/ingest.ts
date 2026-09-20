@@ -11,6 +11,7 @@ import {
 } from "../db/spans.js";
 import type { Config } from "../config.js";
 import type { BlobStore } from "../storage/blobs.js";
+import type { LiveBus } from "../live/bus.js";
 
 /** SHA-256 of the presented key, compared against the stored hash. */
 function hashKey(key: string): string {
@@ -53,6 +54,7 @@ export function registerIngestRoutes(
   sql: Sql,
   config: Config,
   blobs: BlobStore | null,
+  bus: LiveBus | null = null,
 ): void {
   /**
    * In-memory, so the counter is per-instance. Fine for a single Render
@@ -185,6 +187,16 @@ export function registerIngestRoutes(
       await recomputeRollups(tx, traceIds);
     });
 
+    // Publish AFTER the commit, never inside it. A transaction can still roll
+    // back after its last statement, and an event for a trace that never
+    // landed would put a row in every watching UI that a refresh then makes
+    // vanish. Publishing here also keeps a slow or dead Redis off the
+    // transaction's critical path.
+    //
+    // Not awaited: the SDK is waiting on this response, and a live view is a
+    // convenience. publishTraceUpdates swallows its own failures.
+    if (bus) void publishTraceUpdates(sql, bus, traceIds, project.id, req.log);
+
     res.status(202).json({
       accepted: spans.length,
       uploaded,
@@ -192,4 +204,67 @@ export function registerIngestRoutes(
       ...(offloadError ? { offloadError } : {}),
     });
   });
+}
+
+/**
+ * Publish a live event per trace touched by this batch.
+ *
+ * Re-reads the rollups rather than computing them in JS from the batch: a
+ * trace usually spans several batches, so the numbers that matter are the
+ * committed totals, not this batch's contribution. One indexed read of a small
+ * table is cheap next to the write that just happened.
+ *
+ * Swallows every failure. This runs detached from the request, so an
+ * unhandled rejection here would be a process-level crash for something the
+ * caller has already been told succeeded.
+ */
+async function publishTraceUpdates(
+  sql: Sql,
+  bus: LiveBus,
+  traceIds: readonly string[],
+  projectId: string,
+  log: { warn: (o: object, m: string) => void },
+): Promise<void> {
+  try {
+    const rows = await sql<
+      {
+        id: string;
+        name: string;
+        status: string;
+        started_at: Date;
+        duration_ms: number | null;
+        span_count: number;
+        error_count: number;
+        total_tokens: number;
+        total_cost_usd: string | null;
+      }[]
+    >`
+      SELECT id, name, status, started_at, duration_ms,
+             span_count, error_count, total_tokens, total_cost_usd
+      FROM traces
+      WHERE id = ANY(${traceIds as string[]}::uuid[])
+    `;
+
+    const at = new Date().toISOString();
+    for (const r of rows) {
+      bus.publish({
+        type: "trace_updated",
+        traceId: r.id,
+        projectId,
+        name: r.name,
+        status: r.status as "ok" | "error" | "cancelled" | "in_progress",
+        startedAt: new Date(r.started_at).toISOString(),
+        durationMs: r.duration_ms,
+        spanCount: r.span_count,
+        errorCount: r.error_count,
+        totalTokens: r.total_tokens,
+        // NUMERIC arrives as a string from postgres.js; null stays null so an
+        // unknown cost is never reported as a confident zero.
+        totalCostUsd: r.total_cost_usd === null ? null : Number(r.total_cost_usd),
+        at,
+      });
+    }
+  } catch (err) {
+    log.warn({ err }, "failed to publish live trace updates");
+  }
 }

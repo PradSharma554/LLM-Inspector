@@ -141,7 +141,7 @@ llm-inspector/
 **Live:** UI at `llm-inspector.vercel.app`, collector at
 `llm-inspector-collector.onrender.com`.
 
-**61 tests passing.** Verified against local Postgres 17 *and* Neon 18.4.
+**68 tests passing.** Verified against local Postgres 17 *and* Neon 18.4.
 
 ### Versions (checked at build time, not assumed)
 
@@ -645,9 +645,6 @@ Everything is deployed and working end to end. What follows is what remains.
 
 **Not built (deliberately deferred)**
 
-- Live view via Redis pub/sub — `GET /v1/live` (SSE) is designed, not written.
-  Redis runs locally in docker-compose but is unused; it is not provisioned in
-  production at all.
 - Head-based sampling (`sampleRate`) — a designed seam in the SDK, not written.
 
 **Scaling seams (for interviews, not to build)**

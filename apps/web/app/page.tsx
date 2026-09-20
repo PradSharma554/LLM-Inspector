@@ -1,12 +1,6 @@
-import Link from "next/link";
 import { fetchTraces, fetchStorageStats, type TraceRow } from "@/lib/api";
-import {
-  formatCost,
-  formatMs,
-  formatTokens,
-  formatRelativeTime,
-  formatBytes,
-} from "@/lib/format";
+import { formatBytes } from "@/lib/format";
+import { TraceList } from "@/components/TraceList";
 
 export const dynamic = "force-dynamic";
 
@@ -30,9 +24,6 @@ export default async function TraceListPage() {
         <div className="flex items-center gap-2">
           <span className="text-[var(--color-accent)]">◆</span>
           <span className="font-semibold tracking-tight">LLM Execution Inspector</span>
-          <span className="text-[var(--color-text-faint)]">
-            {traces.length} trace{traces.length === 1 ? "" : "s"}
-          </span>
         </div>
         {stats && stats.blobs > 0 && (
           <div
@@ -63,91 +54,10 @@ export default async function TraceListPage() {
           </div>
         </div>
       ) : (
-        <div className="flex-1 overflow-auto">
-          <table className="w-full border-collapse">
-            <thead className="sticky top-0 bg-[var(--color-panel)] z-10">
-              <tr className="text-[var(--color-text-faint)] text-left">
-                <Th className="w-6" />
-                <Th>trace</Th>
-                <Th className="w-24 text-right">duration</Th>
-                <Th className="w-16 text-right">spans</Th>
-                <Th className="w-20 text-right">tokens</Th>
-                <Th className="w-24 text-right">cost</Th>
-                <Th className="w-24 text-right">when</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {traces.map((t) => (
-                <tr
-                  key={t.id}
-                  className="border-b border-[var(--color-border-soft)] hover:bg-[var(--color-panel-2)] group"
-                >
-                  <Td>
-                    <span
-                      className={
-                        t.status === "error"
-                          ? "text-[var(--color-error)]"
-                          : t.status === "in_progress"
-                            ? "text-[var(--color-warn)]"
-                            : "text-[var(--color-ok)]"
-                      }
-                      title={t.status}
-                    >
-                      {t.status === "error" ? "●" : t.status === "in_progress" ? "◐" : "○"}
-                    </span>
-                  </Td>
-                  <Td>
-                    <Link
-                      href={`/traces/${t.id}`}
-                      className="hover:text-[var(--color-accent)] hover:underline"
-                    >
-                      {t.name}
-                    </Link>
-                    {t.error_count > 0 && (
-                      <span className="ml-2 text-[var(--color-error)]">
-                        {t.error_count} error{t.error_count === 1 ? "" : "s"}
-                      </span>
-                    )}
-                    {t.dropped_spans > 0 && (
-                      <span
-                        className="ml-2 text-[var(--color-warn)]"
-                        title="Spans dropped by the SDK buffer — surfaced so data loss is never silent"
-                      >
-                        {t.dropped_spans} dropped
-                      </span>
-                    )}
-                  </Td>
-                  <Td className="text-right tabular-nums">{formatMs(t.duration_ms)}</Td>
-                  <Td className="text-right tabular-nums text-[var(--color-text-dim)]">
-                    {t.span_count}
-                  </Td>
-                  <Td className="text-right tabular-nums text-[var(--color-text-dim)]">
-                    {formatTokens(t.total_tokens)}
-                  </Td>
-                  <Td className="text-right tabular-nums">{formatCost(t.total_cost_usd)}</Td>
-                  <Td className="text-right text-[var(--color-text-faint)]">
-                    {formatRelativeTime(t.started_at)}
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        // Server-rendered rows seed the client component, which then patches
+        // them from the SSE feed. First paint needs no JavaScript.
+        <TraceList initial={traces} />
       )}
     </div>
   );
-}
-
-function Th({ children, className = "" }: { children?: React.ReactNode; className?: string }) {
-  return (
-    <th
-      className={`px-2 py-1 font-normal border-b border-[var(--color-border)] ${className}`}
-    >
-      {children}
-    </th>
-  );
-}
-
-function Td({ children, className = "" }: { children?: React.ReactNode; className?: string }) {
-  return <td className={`px-2 py-1 ${className}`}>{children}</td>;
 }

@@ -8,6 +8,8 @@ import { BlobStore } from "./storage/blobs.js";
 import { blobConfig } from "./config.js";
 import { registerIngestRoutes } from "./routes/ingest.js";
 import { registerQueryRoutes } from "./routes/query.js";
+import { registerLiveRoutes } from "./routes/live.js";
+import { LiveBus } from "./live/bus.js";
 
 /**
  * The app plus the handles main.ts needs at shutdown.
@@ -19,6 +21,8 @@ import { registerQueryRoutes } from "./routes/query.js";
 export interface App {
   app: Express;
   log: pino.Logger;
+  /** Null when REDIS_URL is unset; the collector runs fine without it. */
+  bus: LiveBus | null;
 }
 
 /**
@@ -103,8 +107,14 @@ export function buildApp(config: Config, sql: Sql): App {
     log.warn("object storage not configured — payloads stay inline in Postgres");
   }
 
-  registerIngestRoutes(app, sql, config, blobs);
+  const bus = config.REDIS_URL ? new LiveBus(config.REDIS_URL, log) : null;
+  if (!bus) {
+    log.warn("REDIS_URL not set — live view disabled, /v1/live returns 503");
+  }
+
+  registerIngestRoutes(app, sql, config, blobs, bus);
   registerQueryRoutes(app, sql, blobs, config);
+  registerLiveRoutes(app, bus, config);
 
   /**
    * Error handler. Must be registered last, and must declare all four
@@ -139,5 +149,5 @@ export function buildApp(config: Config, sql: Sql): App {
     res.status(500).json({ error: "internal_error", message: "Unexpected server error." });
   });
 
-  return { app, log };
+  return { app, log, bus };
 }

@@ -11,11 +11,13 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
-    "test": "tsc -p tsconfig.json && node --test dist/**/*.test.js"
+    "test": "tsc -p tsconfig.json && node --test \"dist/**/*.test.js\""
   },
   "dependencies": {
     "zod": "^4.4.3"

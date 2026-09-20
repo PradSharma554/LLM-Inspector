@@ -13,6 +13,8 @@ export {
 
 export { IngestBatch, IngestResponse, ApiError, PROTOCOL_VERSION } from "./ingest.js";
 
+export { LiveEvent, TraceUpdatedEvent, LIVE_CHANNEL } from "./live.js";
+
 export {
   PRICING,
   CACHE_READ_MULTIPLIER,

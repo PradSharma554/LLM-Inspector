@@ -272,7 +272,7 @@ multi-instance deployment would move them to Redis.
 - [ ] Neon password rotated
 - [ ] Pooled connection string (`-pooler` in hostname), not direct
 - [ ] R2 bucket created, token scoped to that bucket only
-- [ ] `pnpm build && pnpm test` passes locally (61 tests)
+- [ ] `pnpm build && pnpm test` passes locally (68 tests)
 - [ ] `.env` still gitignored — `git check-ignore -v .env`
 - [ ] Migration run against Neon, ingest key saved somewhere safe
 - [ ] `NEXT_PUBLIC_API_BASE` points at the Render URL, no trailing slash

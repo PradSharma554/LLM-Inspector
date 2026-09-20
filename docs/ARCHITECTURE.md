@@ -323,7 +323,10 @@ run on free tiers, and the read and write paths share connection pooling.
   parent-map pass beats a recursive CTE and is far easier to reason about.
 - `GET /v1/spans/:id/payload` — fetch from R2 on demand. This is why payloads are
   offloaded: the list view never pays for them.
-- `GET /v1/live` — SSE, backed by Redis pub/sub.
+- `GET /v1/live` — SSE, backed by Redis pub/sub. Optional: without `REDIS_URL`
+  the endpoint reports 503 and the rest of the collector is unaffected, which
+  is the production state today. Events carry the list-view columns only —
+  never payloads, since Redis is a bus here and not a store.
 
 Type-safety note: `postgres.js` lets you parameterise row types, so query results
 are typed against the same protocol types the SDK emits. End-to-end type flow
