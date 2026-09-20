@@ -93,7 +93,7 @@ INSPECTOR_KEY=insp_... pnpm demo
 | `pnpm dev:server` | collector with tsc watch + auto-restart |
 | `pnpm web` | Next.js UI on :3000 |
 | `pnpm demo` | send a sample trace |
-| `pnpm test` | all 41 tests |
+| `pnpm test` | all 61 tests |
 
 ## Verified in production
 
@@ -126,7 +126,7 @@ would make the timeline lie about where the latency went.
 
 ```
 packages/protocol/   zod schemas, cache-aware pricing, tree assembly   15 tests
-packages/server/     Express collector + query API, R2 offload
+packages/server/     Express collector + query API, R2 offload   20 tests
 packages/sdk/        inspector.wrap(client), AsyncLocalStorage, TTFT   26 tests
 apps/web/            Next.js DevTools UI — waterfall, flame, inspector
 examples/            agent-demo.mjs — runs with no API key

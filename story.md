@@ -133,7 +133,7 @@ llm-inspector/
 ├── .github/workflows/      deploy-backend.yml, keepalive.yml
 ├── packages/
 │   ├── protocol/           zod schemas, pricing, tree assembly   15 tests
-│   ├── server/             Express collector + query API + R2
+│   ├── server/             Express collector + query API + R2  20 tests
 │   └── sdk/                wrap(), AsyncLocalStorage, TTFT       26 tests
 └── apps/web/               Next.js 16 DevTools UI
 ```
@@ -141,7 +141,7 @@ llm-inspector/
 **Live:** UI at `llm-inspector.vercel.app`, collector at
 `llm-inspector-collector.onrender.com`.
 
-**41 tests passing.** Verified against local Postgres 17 *and* Neon 18.4.
+**61 tests passing.** Verified against local Postgres 17 *and* Neon 18.4.
 
 ### Versions (checked at build time, not assumed)
 
