@@ -14,6 +14,19 @@ const ConfigSchema = z.object({
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
 
   /**
+   * How many reverse proxies sit in front of this process.
+   *
+   * Express reads the client IP from the right of X-Forwarded-For, skipping
+   * this many hops. The number matters for security, not just correctness: the
+   * header is client-supplied, so trusting ALL of it (`trust proxy: true`)
+   * lets anyone prepend a fake address and defeat every IP-keyed rate limit.
+   *
+   * Default 1: Render, Railway and Fly all put exactly one proxy in front.
+   * Use 0 when running the collector with no proxy at all.
+   */
+  TRUST_PROXY_HOPS: z.coerce.number().int().nonnegative().default(1),
+
+  /**
    * Payloads at or below this size stay inline in Postgres; larger ones are
    * promoted to object storage. 4 KB balances avoiding an R2 round-trip for
    * small prompts against keeping Postgres rows narrow — Neon free is 0.5 GB.
@@ -26,7 +39,7 @@ const ConfigSchema = z.object({
    */
   MAX_QUEUE_DEPTH: z.coerce.number().int().positive().default(10_000),
 
-  /** Max ingest body size. Fastify defaults to 1 MB, which batched spans exceed. */
+  /** Max ingest body size. express.json defaults to 100 KB, which batched spans exceed. */
   BODY_LIMIT_BYTES: z.coerce.number().int().positive().default(8 * 1024 * 1024),
 
   // --- Object storage (payload offload) ------------------------------------

@@ -31,6 +31,12 @@ services:
         value: 10000 # Render injects this; declared for clarity
       - key: LOG_LEVEL
         value: info
+      # Render terminates TLS at one proxy, so the client IP is one hop from
+      # the right of X-Forwarded-For. Declared rather than left to the default
+      # because the value is security-relevant: trusting the whole header
+      # would let a caller forge an address per request and slip the limiter.
+      - key: TRUST_PROXY_HOPS
+        value: 1
 
       # Set these in the Render dashboard — never commit them.
       # DATABASE_URL must be the POOLED Neon string (hostname contains -pooler).

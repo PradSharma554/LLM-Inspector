@@ -36,7 +36,7 @@ export function createDb(config: Config): Sql {
     // Neon requires TLS. `sslmode=require` in the URL covers it, but being
     // explicit means a URL missing the parameter still connects securely.
     ssl: isNeon ? "require" : false,
-    // Silence postgres.js's own notice logging; Fastify's logger owns output.
+    // Silence postgres.js's own notice logging; the pino logger owns output.
     onnotice: () => {},
   });
 }

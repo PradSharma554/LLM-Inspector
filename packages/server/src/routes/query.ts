@@ -1,4 +1,5 @@
-import type { FastifyInstance } from "fastify";
+import type { Express } from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { buildSpanTree, type Span } from "@llm-inspector/protocol";
 import type { Sql } from "../db/client.js";
@@ -14,7 +15,7 @@ const ListQuery = z.object({
 });
 
 export function registerQueryRoutes(
-  app: FastifyInstance,
+  app: Express,
   sql: Sql,
   blobs: BlobStore | null = null,
   config?: Config,
@@ -22,11 +23,13 @@ export function registerQueryRoutes(
   // Read routes are public and unauthenticated (the UI calls them from the
   // browser), so they are keyed by IP. A generous ceiling: enough for normal
   // browsing, low enough that a scraper cannot hammer Neon indefinitely.
-  const readLimit = {
-    config: {
-      rateLimit: { max: config?.RATE_LIMIT_READ_PER_MIN ?? 300, timeWindow: "1 minute" },
-    },
-  };
+  const readLimit = rateLimit({
+    windowMs: 60_000,
+    limit: config?.RATE_LIMIT_READ_PER_MIN ?? 300,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+  });
+
   /**
    * Trace list. Hits only the `traces` table — never aggregates over spans,
    * which is why rollups are denormalised at ingest.
@@ -35,10 +38,11 @@ export function registerQueryRoutes(
    * and discards rows, so deep pages get progressively slower, and rows shifting
    * between requests cause items to be skipped or repeated.
    */
-  app.get("/v1/traces", readLimit, async (request, reply) => {
-    const parsed = ListQuery.safeParse(request.query);
+  app.get("/v1/traces", readLimit, async (req, res) => {
+    const parsed = ListQuery.safeParse(req.query);
     if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid_query", message: parsed.error.message });
+      res.status(400).json({ error: "invalid_query", message: parsed.error.message });
+      return;
     }
     const { projectId, limit, before, status } = parsed.data;
 
@@ -56,7 +60,7 @@ export function registerQueryRoutes(
     `;
 
     const nextCursor = rows.length === limit ? rows[rows.length - 1]!.started_at : null;
-    return reply.send({ traces: rows, nextCursor });
+    res.json({ traces: rows, nextCursor });
   });
 
   /**
@@ -67,15 +71,17 @@ export function registerQueryRoutes(
    * the (trace_id, start_ns) index directly, and the same buildSpanTree() runs
    * in the browser — one implementation, tested once.
    */
-  app.get<{ Params: { id: string } }>("/v1/traces/:id", readLimit, async (request, reply) => {
-    const id = z.uuid().safeParse(request.params.id);
+  app.get("/v1/traces/:id", readLimit, async (req, res) => {
+    const id = z.uuid().safeParse(req.params.id);
     if (!id.success) {
-      return reply.code(400).send({ error: "invalid_id", message: "Malformed trace id." });
+      res.status(400).json({ error: "invalid_id", message: "Malformed trace id." });
+      return;
     }
 
     const [trace] = await sql`SELECT * FROM traces WHERE id = ${id.data} LIMIT 1`;
     if (!trace) {
-      return reply.code(404).send({ error: "not_found", message: "No such trace." });
+      res.status(404).json({ error: "not_found", message: "No such trace." });
+      return;
     }
 
     const rows = await sql`
@@ -83,7 +89,7 @@ export function registerQueryRoutes(
     `;
 
     const spans: Span[] = rows.map(rowToSpan);
-    return reply.send({ trace, spans, tree: buildSpanTree(spans) });
+    res.json({ trace, spans, tree: buildSpanTree(spans) });
   });
 
   /**
@@ -93,43 +99,43 @@ export function registerQueryRoutes(
    * and the waterfall never pay for prompt or completion bytes, because they
    * are only pulled when a user actually clicks a span to inspect it.
    */
-  app.get<{ Params: { id: string }; Querystring: { key?: string } }>(
-    "/v1/spans/:id/payload",
-    readLimit,
-    async (request, reply) => {
-      const id = z.uuid().safeParse(request.params.id);
-      if (!id.success) {
-        return reply.code(400).send({ error: "invalid_id", message: "Malformed span id." });
-      }
+  app.get("/v1/spans/:id/payload", readLimit, async (req, res) => {
+    const id = z.uuid().safeParse(req.params.id);
+    if (!id.success) {
+      res.status(400).json({ error: "invalid_id", message: "Malformed span id." });
+      return;
+    }
 
-      const [row] = await sql<{ payloads: Record<string, any> }[]>`
-        SELECT payloads FROM spans WHERE id = ${id.data} LIMIT 1
-      `;
-      if (!row) return reply.code(404).send({ error: "not_found", message: "No such span." });
+    const [row] = await sql<{ payloads: Record<string, any> }[]>`
+      SELECT payloads FROM spans WHERE id = ${id.data} LIMIT 1
+    `;
+    if (!row) {
+      res.status(404).json({ error: "not_found", message: "No such span." });
+      return;
+    }
 
-      const key = request.query.key;
-      const entries = key ? { [key]: row.payloads[key] } : row.payloads;
-      const out: Record<string, unknown> = {};
+    const key = typeof req.query.key === "string" ? req.query.key : undefined;
+    const entries = key ? { [key]: row.payloads[key] } : row.payloads;
+    const out: Record<string, unknown> = {};
 
-      for (const [k, p] of Object.entries(entries)) {
-        if (!p) continue;
-        if (p.storage === "inline") {
-          out[k] = p.data;
-        } else if (blobs) {
-          try {
-            out[k] = await blobs.fetch(p.ref);
-          } catch (err) {
-            request.log.error({ err, ref: p.ref }, "payload fetch failed");
-            out[k] = { __error: "payload unavailable" };
-          }
-        } else {
-          out[k] = { __error: "object storage not configured" };
+    for (const [k, p] of Object.entries(entries)) {
+      if (!p) continue;
+      if (p.storage === "inline") {
+        out[k] = p.data;
+      } else if (blobs) {
+        try {
+          out[k] = await blobs.fetch(p.ref);
+        } catch (err) {
+          req.log.error({ err, ref: p.ref }, "payload fetch failed");
+          out[k] = { __error: "payload unavailable" };
         }
+      } else {
+        out[k] = { __error: "object storage not configured" };
       }
+    }
 
-      return reply.send({ payloads: out });
-    },
-  );
+    res.json({ payloads: out });
+  });
 
   /**
    * Storage stats — how much the content-addressed dedup and gzip are saving.
@@ -137,7 +143,7 @@ export function registerQueryRoutes(
    * Worth exposing rather than hiding: on a 0.5 GB free tier this ratio is the
    * difference between a usable tool and one that fills up mid-demo.
    */
-  app.get("/v1/stats/storage", readLimit, async (_request, reply) => {
+  app.get("/v1/stats/storage", readLimit, async (_req, res) => {
     const [stats] = await sql<
       { blobs: string; logical_bytes: string; stored_bytes: string; total_refs: string }[]
     >`
@@ -151,7 +157,7 @@ export function registerQueryRoutes(
     const logical = Number(stats?.logical_bytes ?? 0);
     const stored = Number(stats?.stored_bytes ?? 0);
 
-    return reply.send({
+    res.json({
       // Whether object storage is wired up at all.
       //
       // Surfaced deliberately: when the S3_* env vars are missing the collector

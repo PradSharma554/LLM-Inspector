@@ -45,7 +45,7 @@ change is a compile error across the workspace rather than a runtime surprise.
 | Layer    | Choice | Why |
 | -------- | ------ | --- |
 | Protocol | zod 4 | single source of truth, shared by every package |
-| Collector| Fastify 5 | schema-based validation/serialisation on a pure-JSON path |
+| Collector| Express 5 | ubiquitous and unsurprising; zod owns validation at the boundary |
 | Database | Postgres via `postgres.js` | pipelining, prepared statements, parameterised by construction |
 | Payloads | R2 / MinIO via `@aws-sdk/client-s3` | S3-compatible, so identical code locally and in prod |
 | Frontend | Next.js 16 + Tailwind 4 | dense monospace UI, virtualised waterfall |
@@ -126,7 +126,7 @@ would make the timeline lie about where the latency went.
 
 ```
 packages/protocol/   zod schemas, cache-aware pricing, tree assembly   15 tests
-packages/server/     Fastify collector + query API, R2 offload
+packages/server/     Express collector + query API, R2 offload
 packages/sdk/        inspector.wrap(client), AsyncLocalStorage, TTFT   26 tests
 apps/web/            Next.js DevTools UI — waterfall, flame, inspector
 examples/            agent-demo.mjs — runs with no API key

@@ -273,9 +273,9 @@ await inspector.span('retrieval', async (s) => {
 
 ### 3.2 Collector (TypeScript / Node)
 
-Runtime: **Node 20+ with Fastify.** Fastify over Express because its
-schema-based validation and serialisation are meaningfully faster on a
-JSON-heavy ingest path, and this service is nothing but JSON in, JSON out.
+Runtime: **Node 22+ with Express 5.** Validation is zod at the route boundary,
+using the same schema the SDK serialised from, so the framework is doing
+routing and middleware rather than owning the contract.
 
 Postgres client: **`postgres.js`** (not `pg`). It supports pipelining, has
 first-class prepared statements, and its tagged-template API generates
@@ -314,7 +314,7 @@ better interview answer than "I used Go because it's fast."
 
 ### 3.3 Query API (TypeScript, same service)
 
-Same Fastify app, separate route module. One deployable instead of two — less to
+Same Express app, separate route module. One deployable instead of two — less to
 run on free tiers, and the read and write paths share connection pooling.
 
 - `GET /v1/traces` — cursor-paginated list, hits only the `traces` table.
@@ -357,7 +357,7 @@ is 60% done in every direction shows nothing.
 the zod span schema. Small, but it is the keystone: every other package imports
 it, so getting it first means the rest is type-checked against reality.
 
-**M1 — Skeleton end to end.** One hardcoded span from a script → Fastify
+**M1 — Skeleton end to end.** One hardcoded span from a script → Express
 collector → Neon → a page that renders it. Proves the whole pipeline before any
 polish.
 
@@ -423,7 +423,7 @@ and here is why it is not worth it yet."*
   path blocks the event loop and serialises every concurrent request behind it.
   Use the callback/promise form so it runs on the libuv threadpool. This is the
   single most likely performance bug in a Node collector.
-- **Cap the ingest body size.** Fastify's `bodyLimit` defaults to 1 MB; batched
+- **Cap the ingest body size.** `express.json` defaults to 100 KB; batched
   span payloads will exceed it. Raise it deliberately to a known ceiling rather
   than discovering the 413 in production — and keep a ceiling, so a malformed
   client cannot OOM the process.

@@ -133,7 +133,7 @@ llm-inspector/
 ├── .github/workflows/      deploy-backend.yml, keepalive.yml
 ├── packages/
 │   ├── protocol/           zod schemas, pricing, tree assembly   15 tests
-│   ├── server/             Fastify collector + query API + R2
+│   ├── server/             Express collector + query API + R2
 │   └── sdk/                wrap(), AsyncLocalStorage, TTFT       26 tests
 └── apps/web/               Next.js 16 DevTools UI
 ```
@@ -145,7 +145,7 @@ llm-inspector/
 
 ### Versions (checked at build time, not assumed)
 
-Node 24.18.1 · pnpm 11.18.0 · TypeScript 7.0.2 · zod 4.4.3 · Fastify 5.11.0 ·
+Node 24.18.1 · pnpm 11.18.0 · TypeScript 7.0.2 · zod 4.4.3 · Express 5.2.1 ·
 postgres.js 3.4.9 · Next 16.2.12 · React 19.2.8 · Tailwind 4.3.3 ·
 @aws-sdk/client-s3 3.1101.0 · @types/react 19.2.18 · @types/react-dom 19.2.4
 

@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import type { FastifyInstance } from "fastify";
+import type { Express, Request } from "express";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { IngestBatch } from "@llm-inspector/protocol";
 import type { Sql } from "../db/client.js";
 import {
@@ -28,28 +29,53 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(ba, bb);
 }
 
+/**
+ * Rate-limit key: the API key for authenticated ingest, the IP otherwise.
+ *
+ * Keying ingest on the key rather than the IP matters: a legitimate SDK behind
+ * a corporate NAT shares one IP with everyone else there, so an IP-keyed limit
+ * would throttle honest users while a leaked key spread across many IPs would
+ * slip straight through.
+ *
+ * The unauthenticated fallback runs the IP through `ipKeyGenerator`, which
+ * buckets IPv6 by /64. A bare `req.ip` would be a bypass: a single IPv6 client
+ * is routinely handed a whole /64, so it could take a fresh address per request
+ * and never hit the limit at all.
+ */
+function ingestKeyGenerator(req: Request): string {
+  const auth = req.headers.authorization;
+  if (auth?.startsWith("Bearer ")) return `k:${auth.slice(7, 39)}`;
+  return `ip:${ipKeyGenerator(req.ip ?? "")}`;
+}
+
 export function registerIngestRoutes(
-  app: FastifyInstance,
+  app: Express,
   sql: Sql,
   config: Config,
   blobs: BlobStore | null,
 ): void {
-  app.post("/v1/traces", {
-    config: {
-      rateLimit: {
-        max: config.RATE_LIMIT_INGEST_PER_MIN,
-        timeWindow: "1 minute",
-      },
-    },
-  }, async (request, reply) => {
+  /**
+   * In-memory, so the counter is per-instance. Fine for a single Render
+   * service; a multi-instance deployment would move this to Redis.
+   */
+  const ingestLimit = rateLimit({
+    windowMs: 60_000,
+    limit: config.RATE_LIMIT_INGEST_PER_MIN,
+    keyGenerator: ingestKeyGenerator,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+  });
+
+  app.post("/v1/traces", ingestLimit, async (req, res) => {
     // --- auth -----------------------------------------------------------
-    const auth = request.headers.authorization;
+    const auth = req.headers.authorization;
     const presented = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
     if (!presented) {
-      return reply.code(401).send({
+      res.status(401).json({
         error: "unauthorized",
         message: "Missing Bearer token. Pass your project ingest key.",
       });
+      return;
     }
 
     const keyHash = hashKey(presented);
@@ -57,16 +83,17 @@ export function registerIngestRoutes(
       SELECT id, api_key_hash FROM projects WHERE api_key_hash = ${keyHash} LIMIT 1
     `;
     if (!project || !safeEqual(project.api_key_hash, keyHash)) {
-      return reply.code(401).send({ error: "unauthorized", message: "Invalid ingest key." });
+      res.status(401).json({ error: "unauthorized", message: "Invalid ingest key." });
+      return;
     }
 
     // --- validate -------------------------------------------------------
     // Same zod schema the SDK serialised from, imported from the protocol
     // package. A protocol change is a compile error on both sides rather than
     // a runtime surprise here.
-    const parsed = IngestBatch.safeParse(request.body);
+    const parsed = IngestBatch.safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({
+      res.status(400).json({
         error: "invalid_batch",
         message: "Batch failed schema validation.",
         details: parsed.error.issues.slice(0, 20).map((i) => ({
@@ -74,6 +101,7 @@ export function registerIngestRoutes(
           message: i.message,
         })),
       });
+      return;
     }
 
     const batch = parsed.data;
@@ -82,10 +110,11 @@ export function registerIngestRoutes(
     // Shed load rather than queue without bound. The SDK's own buffer absorbs
     // this, and an explicit 503 + Retry-After is far better than an OOM.
     if (batch.spans.length > config.MAX_QUEUE_DEPTH) {
-      return reply
-        .code(503)
-        .header("Retry-After", "2")
-        .send({ error: "overloaded", message: "Batch exceeds queue capacity." });
+      res
+        .status(503)
+        .set("Retry-After", "2")
+        .json({ error: "overloaded", message: "Batch exceeds queue capacity." });
+      return;
     }
 
     // --- storage quota ----------------------------------------------------
@@ -101,12 +130,13 @@ export function registerIngestRoutes(
       FROM traces WHERE project_id = ${project.id}
     `;
     if (Number(usage?.spans ?? 0) >= config.MAX_SPANS_PER_PROJECT) {
-      return reply.code(429).send({
+      res.status(429).json({
         error: "quota_exceeded",
         message:
           `Project has reached its span limit (${config.MAX_SPANS_PER_PROJECT}). ` +
           `Delete old traces or raise MAX_SPANS_PER_PROJECT.`,
       });
+      return;
     }
 
     // --- write ----------------------------------------------------------
@@ -144,7 +174,7 @@ export function registerIngestRoutes(
         // blob ledger. The reason is echoed in the response so a caller can
         // see it without access to the server logs.
         offloadError = err instanceof Error ? err.name : "unknown";
-        request.log.error({ err }, "payload offload failed — keeping inline");
+        req.log.error({ err }, "payload offload failed — keeping inline");
       }
     }
 
@@ -155,7 +185,7 @@ export function registerIngestRoutes(
       await recomputeRollups(tx, traceIds);
     });
 
-    return reply.code(202).send({
+    res.status(202).json({
       accepted: spans.length,
       uploaded,
       deduped,
